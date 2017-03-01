@@ -1,0 +1,479 @@
+#hw 2 & Labs 4-6
+
+#to go directly to HW2 results, scroll all the way to the bottom.
+
+bash
+mkdir isaiah
+cd isaiah
+
+
+########################
+#Lab 4 - Assembly!
+#########################
+
+#install Megahit
+git clone https://github.com/voutcn/megahit.git
+	#getting into megahit (which is a thing: a scaleable metagenome assembler - community driven!)
+cd megahit
+make -j 4
+	#make = recompile parts of a program; -j specifies number of jobs to run simultaneously
+		#so compiling this again for 4 jobs?  Or just doing 4 jobs at once in recompiling MEGAHIT?
+			#whatever it is it gets the job done
+
+#install QUAST
+cd ~/
+git clone https://github.com/ablab/quast.git -b release_4.2
+export PYTHONPATH=$(pwd)/quast/libs/
+	#why is there a (pwd) here?  change it.
+	#evaluates genome assemblies (can do this without a reference genome!)
+			
+			
+			
+#download E. coli dataset
+curl -O -L https://s3.amazonaws.com/public.ged.msu.edu/ecoli_ref-5m.fastq.gz
+	#remember to get it into your wd; yes, that is .GZ
+	#note: the size should be ~412 Mb; if it is shorter, rm and try again
+	
+#run MEGAHIT assembler
+~/megahit/megahit --12 ecoli_ref-5m.fastq.gz -o ecoli
+	#assembles E. coli data set with Megahit
+		#takes a long while (>6min)
+		#if ecoli_ref-5m.fastq.gz is a corrupted / truncated file, this will fail
+		
+cp ecoli/final.contigs.fa ecoli-assembly.fa
+	#copying contigs megahit generated, calling it assembly in ~/<my work folder>
+
+head ecoli-assembly.fa
+	#taking a look at first so many characters, ATGC galore
+
+#examine using QUAST
+home/ubuntu/quast/quast.py ecoli-assembly.fa -o ecoli_report
+	#uses quast.py in the quast folder on ecoli-assembly.fa in the wd (so make sure yer in the wd yo) to generate ecoli_report
+	#not working, saying quast.py doesn't exist ("ls" in ~/quast shows it's there...
+		#cd to ~/quast, running from there, says an installation error involving a file in /quast/lib
+		#removing directory with rm -rf quast while in home/ubuntu
+		#reinstalling...
+			#still nada, do the next line instead, maybe that'll work:	
+python2.7 ~/quast/quast.py ecoli-assembly.fa -o ecoli_report
+		#THIS works!  Hurray!
+			#does it?  says: NOTICES: 2; WARNINGS: 1; non-fatal ERRORS: 0
+	#generates dir ecoli_report
+		#in ecoli_report is report.txt, with lots of data
+			#ex: 	contigs >0bp	= 119
+			#		contigs >1000bp	= 92		that's a lot of tiny contigs!
+			#	GC = 50.75%
+	#NOTICE: Genes are not predicted by default.  Use --gene-finding option to enable it.
+
+
+			
+#################									
+#Lab 5 - Assembling and evaluating microbial genome	
+##################									
+
+#build MEGAHIT
+#run lab 4 through using Megahit on the Ecoli genome
+#install Quast
+#run Quast through the majigger
+
+
+#Mapping
+
+#install bwa
+cd
+curl -L https://sourceforge.net/projects/bio-bwa/files/bwa-0.7.15.tar.bz2/download > bwa-0.7.15.tar.bz2	
+
+tar xjvf bwa-0.7.15.tar.bz2
+cd bwa-0.7.15
+make
+	#let there bwa, and there was (b)wa
+
+sudo cp bwa ~/isaiah/
+
+echo 'export PATH=$PATH:~/isaiah/' >> ~/.bashrc
+source ~/.bashrc
+
+#install khmer & samtools
+pip install khmer==2.0
+		#"could not find .egg-info directory in install record for khmer==2.0"
+		#"could not find .egg-info directory in install record for screed>=0.9 (from khmer==2.0)"
+		#"could not find .egg-info directory in install record for bz2file (from khmer==2.0)"
+sudo apt-get -y install samtools
+
+#"split the reads"
+cd ~/isaiah
+gunzip -c ecoli_ref-5m.fastq.gz | head -1000000 | split-paired-reads.py -1 head.1 -2 head.2
+	#splits "interleaved reads" into two files; left read is -1, right read is -2 (and word after is the new file, with .1 or .2
+
+#"map the reads"
+bwa index ecoli-assmebly.fa
+bwa aln ecoli-assembly.fa head.1 > head.1.sai
+bwa aln ecoli-assembly.fa head.2 > head.2.sai
+bwa sampe ecoli-assembly.fa head.1.sai head.2.sai head.1 head.2 > head.sam
+	#generate sequence alignment of all this jazz
+	
+#convert to BAM, sort and index it
+samtools import ecoli-assembly.fai head.sam head.bam
+samtools sort head.bam head.sorted
+samtools index head.sorted.bam
+
+samtools view -c -f 4 head.sorted.bam
+	#asks how many reads didn't align to assembly - 0
+samtools view -c -F 4 head.sorted.bam
+	#asks how many reads *did* align to assembly - 0
+	
+	#...0 aligned and 0 didn't align.  There's no alignment happening here?
+	#is this not working or is it a problem with how the program runs?
+		#maybe takes a too-long word and tries to align it and no beuno?
+
+				####	#		 ###	 ####	#####	
+####			#   #	#		#   #	#		  #		
+#BLASTing!		####	#		#####	 ###	  #		
+#####			#   #	#		#   #	    #	  #		
+				#####	#####	#   #	####	  #		
+#install NCBI BLAST+
+sudo apt-get -y install ncbi-blast+
+
+makeblastdb -dbtype nuc1 -in ecoli-assembly.fa
+	#like it says, creates a blast-ing database
+		#for whatever reason, this took 3 tries before the console could do it.
+			#maybe typing errors first two times?  not much to get wrong, but...
+
+#grab an E. coli gene
+curl -O http://www.uniprot.org/uniprot/P0ACJ8.fasta
+	#uniprot server, P0ACJ8 - which is...cAMP receptor protein
+	#it failed for me the first time - connection refused
+
+#Set BLASTers to...BLAST.
+tblastn -query P0ACJ8.fasta -db ecoli-assembly.fa
+	#doing a translating blast, since we got the protein sequence and are aligning it to genomic
+	#results:
+		#query (1,21)::subject (97426,96797)		- strand	100% identity
+		#query (151, 172)::subject (65702,65631)	-			50% identity, 2 gaps
+		#query (21, 124)::subject (33623,33315)		-			19% id, 1 gap, 47% +
+		#query (162, 192)::subject (59629,59730)	+			35% id, 3 gaps, 59% +
+		#query (106,210)::subject (384,58)			-			26% id, 10 gaps, 42% +
+		#query (5:23)::subject (78140,78084)		-			53% id, 0 gaps, 58% +
+
+#blast, so familiar, so useful.
+
+
+
+
+#
+#
+#
+###########										####
+#LAB 6 - Miscellaneous assembly foo				#, I pity the
+############									#####
+#
+
+###
+#exercise the second: Experience some GitHub
+####
+
+#background: create a repository in github and upload a text file
+	#copy the url of that text file and paste it so you can git clone into it.
+
+cd
+git clone https://github.com/popcornbushwhacker/hello-igg
+	#amusing: asked me for login and password (supplied)
+		#then said failed
+			#redid it, and it logged me in perfectly
+
+ls
+	#shows hello-igg as a directory
+ls hello-igg
+	#can check hello-igg for contents - a readme and HelloIGG txt files
+	
+cd hello-igg
+ls
+cat HelloIgg.txt
+	#remember: everything is case-sensitive!
+	#output: this is a text document
+
+
+###
+#exercise the third: Read Manipulation - b/c some programs like it a specific way
+####
+
+#install khmer
+#grab the ecoli_ref-5m.fastq.gz
+#gunzip it and head it to read the top - interleavened yo
+
+#and remember: go back to your working directory ye gawk
+
+gunzip -c ecoli_ref-5m.fastq.gz | head -400000 | split-paired-reads.py -1 top.R1.fq -2 top.R2.fq
+	#gunzips, takes first 100k (500k-400k) reads and splits into two files
+	
+	head top.R1.fq
+	head top.R2.fq
+	
+#interleave them again with:
+interleave-reads.py top.R1.fq top.R2.fq > top-pe.fq
+	head top-pe.fq
+
+	
+
+
+
+
+###################################################################################################################################################################
+
+
+	
+#		#	#	#     #		#	 ##
+####	#	#	#     #		#	#  #
+#HW2	#####	#  #  #			  #
+#####	#	#	# # # #		#	 #
+#		#	#	##  ##		#	####
+
+#why not filter out erronious bases and adapter reads before doing alignment and whatnot?
+	#use ---- Trimmomatic: A flexible read trimming tool for Illumina NGS data!
+
+#3. Use Trimmomatic to quality filter E. coli 5m (what we've been using all file)
+
+	#install Trimmomatic
+	sudo apt-get -y install trimmomatic
+		#boy, this is big.
+	
+	#download TruSeq3-PE adapters
+	wget https://anonscm.debian.org/cgit/debian-med/trimmomatic.git/plain/adapters/TruSeq3-PE.fa
+	#boy, those were smaller - are these just the adapter sequences, so we can filter them out with trimm-o-matic?
+	
+	TrimmomaticPE head.1 head.2 trim.head.1 trix.head.1 trim.head.2 trix.head.2 ILLUMINACLIP:TruSeq3-PE.fa:2:40:15 LEADING:2 TRAILING:2 SLIDINGWINDOW:4:2 MINLEN:25
+				input r1, r2,	output, orphan,			output, orphan, 		
+		#error: unable to detect quality encoding
+		#note: this is only heads, redo split reads on whole bloody thing
+
+	
+	gunzip -c ecoli_ref-5m.fastq.gz | split-paired-reads.py -1 5m.1 -2 5m.2
+		#this is gotta be huge...
+			#hey hey!  0 orphans resulted.  2,500,000 on left and 2,500,000 on the right
+	
+	TrimmomaticPE 5m.1 5m.2 trim.5m.1 trix.5m.1 trim.5m.2 trix.5m.2 ILLUMINACLIP:TruSeq3-PE.fa:2:40:15 LEADING:2 TRAILING:2 SLIDINGWINDOW:4:2 MINLEN:25
+		#quality encoding detected as phred33
+		#completed successfully!
+	
+	
+	
+#4. Run megahit assembler on the quality-filtered reads; INCLUDE SINGLE-ENDED READS that were trimmed by trimmomatic
+
+	#am I to interleaven these two, again?  try it:
+	interleave-reads.py trim.5m.1 trim.5m.2 > trimm.5m
+		#it works!
+	interleave-reads.py trix.5m.1 trix.5m.2 > trixx.5m
+		#"ERROR: This doesn't look like paired data!
+			#guess orphans cannae be paired :(
+
+		#let's see if this works...
+	~/megahit/megahit --12 trimm.5m -o 5mtrimm
+	
+	#now, feeding single-ended reads into MEGAHIT...
+	#Attempt 1: feed megahit the single-end read
+		~/megahit/megahit --12 trim.5m.1 -o 5m-1-trim
+			#megahit cannot use this file.  well shucks.
+	
+	#Attempt 2: feed megahit a paired-end that is a single-end x the same single-end
+		interleave-reads.py trim.5m.1 trim.5m.1 > trim1.5m
+			#can we trick it into interleaving the same thing together?  apparently!
+				#why does this feel like it isn't what I want to do?
+		~/megahit/megahit --12 trim1.5m -o 5mtrim1
+			#seems to be running.  completes just fine (<6' to boot)
+	
+			#strategy fails, results bizarre
+	
+	#Attempt 3: weep impotent tears of rage onto the motherboard in hopes something interesting happens
+	
+	#Attempt 4: search around
+		#options!
+			#-1/-2 paried-end
+			#--12 interleaved-paired-end		 
+			#-r single-end!						<<<<<<<=============THIS
+			
+		~/megahit/megahit -r trim.5m.1 -o 5mTrim1
+			#it's working!  #results are weird!
+			
+		~/megahit/megahit -r trim.5m.2 -o 5mTrim2
+		
+		#& doing the untrimmed original for direct comparison between trimmed and un-
+		~/megahit/megahit -r 5m.1 -o 5m1		
+		~/megahit/megahit -r 5m.2 -o 5m2
+		
+	
+#5. Use Quast to evaluate assembly, compare results from previous assembly
+#for paired-end reads
+	cp 5mtrimm/final.contigs.fa 5mtrimm-assembly.fa
+
+	python2.7 ~/quast/quast.py 5mtrimm-assembly.fa -o 5mtrimm_report
+		#program cannot find	5mtrimm-assembly.fa
+		#searching with ls
+		#copy paste:			5mtrimm-assmebly.fa
+				#it's identical.  Also cannot rm this.
+					#after more tries, could rm.  redo with below:
+					
+	python2.7 ~/quast/quast.py ~/isaiah/5mtrimm/final.contigs.fa -o 5mtrimm_report
+		#bypassing the copy and rename part, just work on this directly
+		#it worked!
+	
+	cat ~/isaiah/5mtrimm/report.txt
+		# 							my results		(untrimmed)		Difference?
+		# n* contigs	>=0bp		117				117				-
+		#				>= 1kbp		93				93				-
+		#				>= 5kbp		69				69				-
+		#				>= 10kbp	64				64				-
+		#				>= 25kbp	52				52				-
+		#				>= 50kbp	32				32				-
+		# Total lenght	>= 0bp		4577092			4577284			192
+		#				...			...				...				-
+		#				>= 50kbp	3578702			3578894			192
+		# n* contigs				102				102				-
+		# Largest contig			246618			246618			-
+		# Total length				4572220			4572412			192
+		# % GC						50.74			50.74			-
+		# N50						105708			105708			-
+		# N75						53842			53842			-
+		# L50						15				15				-
+		# L75						30				30				-
+		# N's per 100 kbp			0.00			0.00			-
+	
+	#not quite the stirring difference I was expecting.
+	
+	
+#for "single-ends reads"
+	#Attempt 2:
+		python2.7 ~/quast/quast.py ~/isaiah/5mtrim1/final.contigs.fa -o 5mtrim1_report
+		cat ~/isaiah/5mtrim1_report/report.txt
+			# 							my results		(untrimmed)		Difference?
+			# n* contigs	>=0bp		346				117				229
+			#				>= 1kbp		307				93				214
+			#				>= 5kbp		217				69				148
+			#				>= 10kbp	154				64				90
+			#				>= 25kbp	59				52				7
+			#				>= 50kbp	8				32				24
+			# Total lenght	>= 0bp		4551540			4577284			25,744
+			#				...			...				...				...
+			#				>= 50kbp	502030			3578894			3,076,864
+			# n* contigs				327				102				225
+			# Largest contig			81494			246618			165,124
+			# Total length				4545014			4572412			27,398
+			# % GC						50.75			50.74			0.01
+			# N50						24901			105708			80,807
+			# N75						14109			53842			39733
+			# L50						60				15				45
+			# L75						122				30				92
+			# N's per 100 kbp			0.00			0.00			-
+	
+			#well, that can't be right.  I wonder what went wrong?  Or what happened, even...
+				#eg: how did GC% go up!?  By 0.01% = 45kbp changes toward GC while there are 27kbp less.
+	
+	#Attempt 4:
+		#5mTrim1
+			python2.7 ~/quast/quast.py ~/isaiah/5mTrim1/final.contigs.fa -o 5mTrim1_report
+			cat ~/isaiah/5mTrim1_report/report.txt
+			
+			#							single-end		paired-end		
+			# 							my results		(untrimmed)		Difference?
+			# n* contigs	>=0bp		302				117				185
+			#				>= 1kbp		270				93				177
+			#				>= 5kbp		207				69				158
+			#				>= 10kbp	151				64				87
+			#				>= 25kbp	58				52				6
+			#				>= 50kbp	13				32				19
+			# Total lenght	>= 0bp		4549580			4577284			27,704
+			#				...			...				...				...
+			#				>= 50kbp	932400			3578894			2,646,494
+			# n* contigs				284				102				182
+			# Largest contig			105633			246618			140,985
+			# Total length				4543354			4572412			29,059
+			# % GC						50.74			50.74			-
+			# N50						27455			105708			78,253
+			# N75						14629			53842			39,213
+			# L50						51				15				36
+			# L75						108				30				78
+			# N's per 100 kbp			0.00			0.00			-
+		
+		#5mTrim2
+			python2.7 ~/quast/quast.py ~/isaiah/5mTrim2/final.contigs.fa -o 5mTrim2_report
+			cat ~/isaiah/5mTrim2_report/report.txt
+			
+			#							single-end		paired-end		
+			# 							my results		(untrimmed)		Difference?
+			# n* contigs	>=0bp		300				117				183
+			#				>= 1kbp		272				93				179
+			#				>= 5kbp		207				69				148
+			#				>= 10kbp	149				64				85
+			#				>= 25kbp	57				52				5
+			#				>= 50kbp	11				32				21
+			# Total lenght	>= 0bp		4550903			4577284			26,381
+			#				...			...				...				...
+			#				>= 50kbp	781003			3578894			2,797,891
+			# n* contigs				287				102				185
+			# Largest contig			103397			246618			143,221
+			# Total length				4546057			4572412			26,355
+			# % GC						50.74			50.74			-
+			# N50						27244			105708			78,464
+			# N75						14954			53842			39,888
+			# L50						52				15				37
+			# L75						109				30				79
+			# N's per 100 kbp			0.00			0.00			-
+			
+		#Comparison of 5mTrim1 against untrimmed 5m1
+			python2.7 ~/quast/quast.py ~/isaiah/5m1/final.contigs.fa -o 5m1_report
+			cat ~/isaiah/5m1_report/report.txt
+				#							single-end		single-end		
+				# 							5mTrim1			5m1 untrimmed	Difference?
+				# n* contigs	>=0bp		302				303				1
+				#				>= 1kbp		270				270				-
+				#				>= 5kbp		207				207				-
+				#				>= 10kbp	151				152				1
+				#				>= 25kbp	58				59				1
+				#				>= 50kbp	13				12				1
+				# Total lenght	>= 0bp		4549580			4550025			445
+				#				...			...				...				...
+				#				>= 50kbp	932400			867778			64,622
+				# n* contigs				284				284				-
+				# Largest contig			105633			105633			-
+				# Total length				4543354			4543485			131
+				# % GC						50.74			50.74			-
+				# N50						27455			27455			-
+				# N75						14629			14629			-
+				# L50						51				52				1
+				# L75						108				109				1
+				# N's per 100 kbp			0.00			0.00			-
+				
+				#hmm, I guess that is the staggering difference to expect!
+				
+			#and 5mTrim2 against untrimmed 5m2
+			python2.7 ~/quast/quast.py ~/isaiah/5m2/final.contigs.fa -o 5m2_report
+			cat ~/isaiah/5m2_report/report.txt
+				#							single-end		single-end		
+				# 							5mTrim2			5m2 untrimmed	Difference?
+				# n* contigs	>=0bp		300				300				-
+				#				>= 1kbp		272				271				1
+				#				>= 5kbp		207				206				1
+				#				>= 10kbp	149				149				-
+				#				>= 25kbp	57				58				1
+				#				>= 50kbp	11				11				-
+				# Total lenght	>= 0bp		4550903			4551116			213
+				#				...			...				...				...
+				#				>= 50kbp	781003			775122			5,881
+				# n* contigs				287				284				3
+				# Largest contig			103397			103397			-
+				# Total length				4546057			4545692			365
+				# % GC						50.74			50.75			0.01
+				# N50						27244			27267			23
+				# N75						14954			15302			348
+				# L50						52				52				-
+				# L75						109				108				1
+				# N's per 100 kbp			0.00			0.00			-
+
+	
+#		#	#	#     #		#	 ##	
+####	#	#	#     #		#	#  #
+#HW2	#####	#  #  #			  #	
+#####	#	#	# # # #		#	 #	
+#		#	#	##  ##		#	####
+
+#Conclusions:
+#Trimming has removed a small amount of material from the assembly, whether single- or paired-end reads
+#Interleaving and treating the separate as a whole has a far greater effect than trimming does on alignment
